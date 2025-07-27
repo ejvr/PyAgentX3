@@ -9,23 +9,20 @@ logger = logging.getLogger('pyagentx3.network')
 logger.addHandler(NullHandler())
 # --------------------------------------------
 
+import asyncio
 import socket
 import time
-import threading
-from queue import Empty
-import struct
 import pyagentx3
 from pyagentx3.pdu import PDU
 
+class Network:
 
-class Network(threading.Thread):
-
-    def __init__(self, queue, oid_list, sethandlers, agent_id, socket_path):
-        threading.Thread.__init__(self)
-        self.stop = threading.Event()
+    def __init__(self, oid_list, sethandlers, agent_id, family, socket_path):
+        self._stop = asyncio.Event()
         self._agent_id = agent_id
+        self._family = family
         self._socket_path = socket_path
-        self._queue = queue
+        self._queue = asyncio.Queue() # @todo Set queue size?
         self._oid_list = oid_list
         self._sethandlers = sethandlers
         self._recv_buf = bytes()
@@ -38,46 +35,48 @@ class Network(threading.Thread):
         self.data_idx = []
         self.socket = None
 
-    def _connect(self):
+    async def _connect(self):
         while True:
             try:
                 logger.info("Try to open socket on ({})".format(self._socket_path))
-                self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                self.socket.connect(self._socket_path)
-                self.socket.settimeout(0.1)
+                loop = asyncio.get_running_loop()
+                self.socket = socket.socket(self._family, socket.SOCK_STREAM)
+                await loop.sock_connect(self.socket, self._socket_path)
                 logger.info("Opened socket on ({})".format(self._socket_path))
                 return
             except socket.error:
                 logger.error("Failed to connect, sleeping and retrying later")
                 time.sleep(2)
 
-    def new_pdu(self, pdu_type):
+    def _new_pdu(self, pdu_type):
         pdu = PDU(pdu_type, agent_id=self._agent_id)
         pdu.session_id = self.session_id
         pdu.transaction_id = self.transaction_id
         self.transaction_id += 1
         return pdu
 
-    def response_pdu(self, org_pdu):
+    def _response_pdu(self, org_pdu):
         pdu = PDU(pyagentx3.AGENTX_RESPONSE_PDU, agent_id=self._agent_id)
         pdu.session_id = org_pdu.session_id
         pdu.transaction_id = org_pdu.transaction_id
         pdu.packet_id = org_pdu.packet_id
         return pdu
 
-    def send_pdu(self, pdu, force=False):
+    async def _send_pdu(self, pdu, force=False):
         log_level = logging.INFO if force else logging.DEBUG
         if self.debug or force:
             logger.log(log_level, "---- Sent PDU:")
             pdu.dump()
         buf = pdu.encode()
-        self.socket.send(buf)
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendall(self.socket, buf)
 
-    def recv_pdu(self):
+    async def _recv_pdu(self):
+        loop = asyncio.get_running_loop()
         # Try to read next n bytes from socket until at least a full
         # PDU header is available.
         if len(self._recv_buf) < pyagentx3.AX_PDU_HDR_LEN:
-            self._recv_buf += self.socket.recv(4096)
+            self._recv_buf += await loop.sock_recv(self.socket, 4096)
             if len(self._recv_buf) < pyagentx3.AX_PDU_HDR_LEN:
                 return None
 
@@ -95,7 +94,7 @@ class Network(threading.Thread):
         # this could be problematic ...
         next_pdu_len = pyagentx3.AX_PDU_HDR_LEN + payload_len
         if len(self._recv_buf) < next_pdu_len:
-            self._recv_buf += self.socket.recv(next_pdu_len)
+            self._recv_buf += await loop.sock_recv(self.socket, next_pdu_len)
             if len(self._recv_buf) < next_pdu_len:
                 return None
 
@@ -116,12 +115,19 @@ class Network(threading.Thread):
 
         return pdu
 
-    # =========================================
+    def send_trap(self, trap_name, *trap_data):
+        self._queue.put_nowait({'trap_oid': trap_name, 'data': trap_data}) #@todo EV Throws QueueFull
 
-    def _get_updates(self):
+    def set_values(self, oid, *values):
+        data = {}
+        for v in values:
+            data[v['name']] = v
+        self._queue.put_nowait({'oid': oid, 'data': data}) #@todo EV Throws QueueFull
+
+    async def _get_updates(self):
         while True:
             try:
-                item = self._queue.get_nowait()
+                item = await self._queue.get()
                 #logger.info('Update: {}'.format(item))
 
                 if 'oid' in item:
@@ -146,15 +152,18 @@ class Network(threading.Thread):
                     trap_data = item['data']
 
                     if len(trap_data) > 0:
-                        trap_pdu = self.new_pdu(pyagentx3.AGENTX_NOTIFY_PDU)
-                        for row in list(trap_data.values()):
-                            #logger.info(row)
-                            trap_pdu.values.append(row)
+                        trap_pdu = self._new_pdu(pyagentx3.AGENTX_NOTIFY_PDU)
+                        # @todo EV Create constant for '1.3.6.1.6.3.1.1.4.1.0'
+                        trap_pdu.values.append({'name': '1.3.6.1.6.3.1.1.4.1.0', 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':trap_oid})
+                        trap_pdu.values.extend(trap_data)
                         trap_pdu.dump()
-                        self.send_pdu(trap_pdu)
+                        await self._send_pdu(trap_pdu)
 
-            except Empty:
+            except asyncio.QueueEmpty:
                 break
+
+        trap_pdu.dump()
+        await self._send_pdu(trap_pdu)
 
     def _get_next_oid(self, oid, endoid):
         if oid in self.data:
@@ -189,42 +198,49 @@ class Network(threading.Thread):
                 return tmp_oid
         return None # No match!
 
-    def start(self):
-        while not self.stop.is_set():
+    async def start(self):
+        while not self._stop.is_set():
             try:
-                self._start_network()
+                await self._run_network()
             except socket.error:
                 logger.error("Network error, master disconnect?!")
 
-    def _start_network(self):
-        self._connect()
+    async def stop(self):
+        self._stop.set()
+
+    async def _run_network(self):
+        await self._connect()
 
         logger.info("==== Open PDU ====")
-        pdu = self.new_pdu(pyagentx3.AGENTX_OPEN_PDU)
-        self.send_pdu(pdu)
-        pdu = self.recv_pdu()
+        pdu = self._new_pdu(pyagentx3.AGENTX_OPEN_PDU)
+        await self._send_pdu(pdu)
+        pdu = await self._recv_pdu()
         self.session_id = pdu.session_id
 
         logger.info("==== Ping PDU ====")
-        pdu = self.new_pdu(pyagentx3.AGENTX_PING_PDU)
-        self.send_pdu(pdu)
-        pdu = self.recv_pdu()
+        pdu = self._new_pdu(pyagentx3.AGENTX_PING_PDU)
+        await self._send_pdu(pdu)
+        pdu = await self._recv_pdu()
 
         logger.info("==== Register PDU ====")
         for oid in self._oid_list:
             logger.info("Registering: %s", oid)
-            pdu = self.new_pdu(pyagentx3.AGENTX_REGISTER_PDU)
+            pdu = self._new_pdu(pyagentx3.AGENTX_REGISTER_PDU)
             pdu.oid = oid
-            self.send_pdu(pdu)
-            pdu = self.recv_pdu()
+            await self._send_pdu(pdu)
+            pdu = await self._recv_pdu()
 
         logger.info("==== Waiting for PDU ====")
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(self._get_updates())
+            tg.create_task(self._process_incoming())
+
+    async def _process_incoming(self):
         while True:
             try:
-                self._get_updates()
-                request = self.recv_pdu()
+                request = await self._recv_pdu()
             except socket.timeout:
-                if self.stop.is_set():
+                if self._stop.is_set():
                     break
                 continue
 
@@ -232,7 +248,7 @@ class Network(threading.Thread):
                 logger.error("Empty PDU, connection closed!")
                 raise socket.error
 
-            response = self.response_pdu(request)
+            response = self._response_pdu(request)
             if request.type == pyagentx3.AGENTX_GET_PDU:
                 logger.info("Received GET PDU")
                 for rvalue in request.range_list:
@@ -308,4 +324,40 @@ class Network(threading.Thread):
                     handler.network_cleanup(request.session_id, request.transaction_id)
                 logger.info("Received CLEANUP PDU")
 
-            self.send_pdu(response)
+            await self._send_pdu(response)
+
+    @staticmethod
+    def value_INTEGER(oid: str, value: int):
+        return {'name': oid, 'type':pyagentx3.TYPE_INTEGER, 'value':value}
+
+    @staticmethod
+    def value_OCTETSTRING(oid: str, value: str):
+        return {'name': oid, 'type':pyagentx3.TYPE_OCTETSTRING, 'value':value}
+
+    @staticmethod
+    def value_OBJECTIDENTIFIER(oid: str, value: str):
+        return {'name': oid, 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':value}
+
+    @staticmethod
+    def value_IPADDRESS(oid: str, value: str):
+        return {'name': oid, 'type':pyagentx3.TYPE_IPADDRESS, 'value':value}
+
+    @staticmethod
+    def value_COUNTER32(oid: str, value: int):
+        return {'name': oid, 'type':pyagentx3.TYPE_COUNTER32, 'value':value}
+
+    @staticmethod
+    def value_GAUGE32(oid: str, value: int):
+        return {'name': oid, 'type':pyagentx3.TYPE_GAUGE32, 'value':value}
+
+    @staticmethod
+    def value_TIMETICKS(oid: str, value: int):
+        return {'name': oid, 'type':pyagentx3.TYPE_TIMETICKS, 'value':value}
+
+    @staticmethod
+    def value_OPAQUE(oid: str, value):
+        return {'name': oid, 'type':pyagentx3.TYPE_OPAQUE, 'value':value}
+
+    @staticmethod
+    def value_COUNTER64(oid: str, value: int):
+        return {'name': oid, 'type':pyagentx3.TYPE_COUNTER64, 'value':value}

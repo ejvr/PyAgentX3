@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import asyncio
+import socket
 import sys
+
+import pyagentx3.network
 sys.path.insert(0,'..')
 
 # --------------------------------------------
@@ -12,7 +16,6 @@ class NullHandler(logging.Handler):
 logger = logging.getLogger('pyagentx3.main')
 logger.addHandler(NullHandler())
 # --------------------------------------------
-
 import random
 import datetime
 import ipaddress
@@ -144,18 +147,26 @@ class SampleAgent(pyagentx3.Agent):
             NetSnmpIntegerSet, data_store=data)
 
 
-def main():
+async def main():
     pyagentx3.setup_logging(debug=False)
 
     try:
-        agt = SampleAgent()
-        agt.start()
+        pyagentx3.SOCKET_PATH = ('127.0.0.1', 705)
+        root_oid = '1.3.6.1.4.1.8072.2'
+        network = pyagentx3.network.Network([root_oid], {}, "AGNT", socket.AF_INET, pyagentx3.SOCKET_PATH)
+        network.set_values(
+            root_oid, 
+            network.value_OCTETSTRING('3.0', 'String for NET-SNMP-EXAMPLES-MIB'),
+            network.value_OBJECTIDENTIFIER('4.0', '1.3.6.1.4.1.8072.2.4.0'),
+            network.value_INTEGER('2.0', 33))
+        await network.start();
     except Exception as ex:
-        print("Unhandled exception: %s" % ex)
-        agt.stop()
+        logging.fatal("Unhandled exception: %s" % ex)
+        await network.stop()
+        raise ex
     except KeyboardInterrupt:
-        agt.stop()
+        await network.stop()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
