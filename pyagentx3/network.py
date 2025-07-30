@@ -16,6 +16,7 @@ from queue import Empty
 import struct
 import pyagentx3
 from pyagentx3.pdu import PDU
+import urllib.parse
 
 
 class Network(threading.Thread):
@@ -42,14 +43,43 @@ class Network(threading.Thread):
         while True:
             try:
                 logger.info("Try to open socket on ({})".format(self._socket_path))
-                self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                self.socket.connect(self._socket_path)
+                fam, addr = Network._parse_socket_path(self._socket_path)
+                self.socket = socket.socket(fam, socket.SOCK_STREAM)
+                self.socket.connect(addr)
                 self.socket.settimeout(0.1)
                 logger.info("Opened socket on ({})".format(self._socket_path))
                 return
             except socket.error:
                 logger.error("Failed to connect, sleeping and retrying later")
                 time.sleep(2)
+
+    @staticmethod
+    def _parse_socket_path(socket_path):
+        # We're following the address specification used to specify 'agentaddress' in snmpd.conf
+        # See the manual page of snmpd.conf (5) and LISTENING ADDRESSES in snmpd.conf (8)
+        #
+        # Expected format:
+        # [<transport-specifier>:]<transport-address>
+        # transport-specifier can be unix, tcp, tcp6, udp, udp6.
+        # (not supporting udp(6) here, because udp sockets behave different)
+        # transport-address: <host|ip-address>[:port]
+        #
+        # ipv6 addresses should be enclosed by square brackets (eg '[::1]')
+        # A socket-path starting with '/' is considered to be a unix socket
+        # (this is compatible with earlier releases)
+        if socket_path.startswith('/'):
+            return socket.AF_UNIX, socket_path
+        trnsprt, addr = socket_path.split(':', 1)
+        if trnsprt == 'unix':
+            return socket.AF_UNIX, addr
+        p = urllib.parse.urlparse('//' + addr)
+        host = p.hostname
+        port = p.port or 705
+        if trnsprt == 'tcp':
+            return socket.AF_INET, (host, port)
+        if trnsprt == 'tcp6':
+            return socket.AF_INET6,(host, port)
+        raise ValueError('Unsupported transport type')
 
     def new_pdu(self, pdu_type):
         pdu = PDU(pdu_type, agent_id=self._agent_id)
