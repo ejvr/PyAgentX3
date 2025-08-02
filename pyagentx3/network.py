@@ -17,12 +17,14 @@ from pyagentx3.pdu import PDU
 
 class Network:
 
-    def __init__(self, oid_list, sethandlers, agent_id, family, socket_path):
+    SNMP_TRAP_OID = '1.3.6.1.6.3.1.1.4.1.0'
+
+    def __init__(self, oid_list, sethandlers, agent_id, family, socket_path, max_queue_size = None):
         self._stop = asyncio.Event()
         self._agent_id = agent_id
         self._family = family
         self._socket_path = socket_path
-        self._queue = asyncio.Queue() # @todo Set queue size?
+        self._queue = asyncio.Queue(max_queue_size or 0)
         self._oid_list = oid_list
         self._sethandlers = sethandlers
         self._recv_buf = bytes()
@@ -41,6 +43,7 @@ class Network:
                 logger.info("Try to open socket on ({})".format(self._socket_path))
                 loop = asyncio.get_running_loop()
                 self.socket = socket.socket(self._family, socket.SOCK_STREAM)
+                self.socket.setblocking(False)
                 await loop.sock_connect(self.socket, self._socket_path)
                 logger.info("Opened socket on ({})".format(self._socket_path))
                 return
@@ -116,13 +119,13 @@ class Network:
         return pdu
 
     def send_trap(self, trap_name, *trap_data):
-        self._queue.put_nowait({'trap_oid': trap_name, 'data': trap_data}) #@todo EV Throws QueueFull
+        self._queue.put_nowait({'trap_oid': trap_name, 'data': trap_data})
 
-    def set_values(self, oid, *values):
+    def publish(self, oid, *values):
         data = {}
         for v in values:
             data[v['name']] = v
-        self._queue.put_nowait({'oid': oid, 'data': data}) #@todo EV Throws QueueFull
+        self._queue.put_nowait({'oid': oid, 'data': data})
 
     async def _get_updates(self):
         while True:
@@ -153,17 +156,13 @@ class Network:
 
                     if len(trap_data) > 0:
                         trap_pdu = self._new_pdu(pyagentx3.AGENTX_NOTIFY_PDU)
-                        # @todo EV Create constant for '1.3.6.1.6.3.1.1.4.1.0'
-                        trap_pdu.values.append({'name': '1.3.6.1.6.3.1.1.4.1.0', 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':trap_oid})
+                        trap_pdu.values.append({'name': Network.SNMP_TRAP_OID, 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':item['trap_oid']})
                         trap_pdu.values.extend(trap_data)
                         trap_pdu.dump()
                         await self._send_pdu(trap_pdu)
 
             except asyncio.QueueEmpty:
                 break
-
-        trap_pdu.dump()
-        await self._send_pdu(trap_pdu)
 
     def _get_next_oid(self, oid, endoid):
         if oid in self.data:
@@ -198,42 +197,44 @@ class Network:
                 return tmp_oid
         return None # No match!
 
-    async def start(self):
+    async def run(self):
         while not self._stop.is_set():
             try:
-                await self._run_network()
+                await self._connect()
+
+                logger.info("==== Open PDU ====")
+                pdu = self._new_pdu(pyagentx3.AGENTX_OPEN_PDU)
+                await self._send_pdu(pdu)
+                pdu = await self._recv_pdu()
+                self.session_id = pdu.session_id
+
+                logger.info("==== Ping PDU ====")
+                pdu = self._new_pdu(pyagentx3.AGENTX_PING_PDU)
+                await self._send_pdu(pdu)
+                pdu = await self._recv_pdu()
+
+                logger.info("==== Register PDU ====")
+                for oid in self._oid_list:
+                    logger.info("Registering: %s", oid)
+                    pdu = self._new_pdu(pyagentx3.AGENTX_REGISTER_PDU)
+                    pdu.oid = oid
+                    await self._send_pdu(pdu)
+                    pdu = await self._recv_pdu()
+
+                logger.info("==== Waiting for PDU ====")
+                async with asyncio.TaskGroup() as tg:
+                    tg.create_task(self._get_updates())
+                    tg.create_task(self._process_incoming())
+            except ExceptionGroup as e:
+                for sub in e.exceptions:
+                    if not isinstance(sub, socket.error):
+                        raise sub
+                logger.error("Network error, master disconnect?!")
             except socket.error:
                 logger.error("Network error, master disconnect?!")
 
     async def stop(self):
         self._stop.set()
-
-    async def _run_network(self):
-        await self._connect()
-
-        logger.info("==== Open PDU ====")
-        pdu = self._new_pdu(pyagentx3.AGENTX_OPEN_PDU)
-        await self._send_pdu(pdu)
-        pdu = await self._recv_pdu()
-        self.session_id = pdu.session_id
-
-        logger.info("==== Ping PDU ====")
-        pdu = self._new_pdu(pyagentx3.AGENTX_PING_PDU)
-        await self._send_pdu(pdu)
-        pdu = await self._recv_pdu()
-
-        logger.info("==== Register PDU ====")
-        for oid in self._oid_list:
-            logger.info("Registering: %s", oid)
-            pdu = self._new_pdu(pyagentx3.AGENTX_REGISTER_PDU)
-            pdu.oid = oid
-            await self._send_pdu(pdu)
-            pdu = await self._recv_pdu()
-
-        logger.info("==== Waiting for PDU ====")
-        async with asyncio.TaskGroup() as tg:
-            tg.create_task(self._get_updates())
-            tg.create_task(self._process_incoming())
 
     async def _process_incoming(self):
         while True:
