@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 
 # --------------------------------------------
+from pyagentx3.tools import hexdump
+import pyagentx3
+import pprint
+import collections
+from ipaddress import IPv4Address, IPv6Address
+import struct
 import logging
+
+
 class NullHandler(logging.Handler):
     def emit(self, record):
         pass
+
+
 logger = logging.getLogger('pyagentx3.pdu')
 logger.addHandler(NullHandler())
 # --------------------------------------------
-
-import struct
-from ipaddress import IPv4Address, IPv6Address
-import collections
-import pprint
-import pyagentx3
-from pyagentx3.tools import hexdump
 
 
 class PDU(object):
@@ -36,21 +39,24 @@ class PDU(object):
         name = pyagentx3.PDU_TYPE_NAME[self.type]
         logger.log(log_level, 'PDU DUMP: New PDU')
         logger.log(log_level, 'PDU DUMP: Meta      : [%s: %d %d %d]',
-                                                name, self.session_id,
-                                                self.transaction_id,
-                                                self.packet_id)
+                   name, self.session_id,
+                   self.transaction_id,
+                   self.packet_id)
 
         if 'payload_length' in self.state:
-            logger.log(log_level, 'PDU DUMP: Length    : %s', self.state['payload_length'])
+            logger.log(log_level, 'PDU DUMP: Length    : %s',
+                       self.state['payload_length'])
 
         if hasattr(self, 'response'):
             logger.log(log_level, 'PDU DUMP: Response  : %s', self.response)
 
         if hasattr(self, 'values'):
-            logger.log(log_level, 'PDU DUMP: Values    : %s', pprint.pformat(self.values))
+            logger.log(log_level, 'PDU DUMP: Values    : %s',
+                       pprint.pformat(self.values))
 
         if hasattr(self, 'range_list'):
-            logger.log(log_level, 'PDU DUMP: Range list: %s', pprint.pformat(self.range_list))
+            logger.log(log_level, 'PDU DUMP: Range list: %s',
+                       pprint.pformat(self.range_list))
 
     # ====================================================
     # encode functions
@@ -127,11 +133,12 @@ class PDU(object):
         return buf
 
     def encode_header(self, pdu_type, payload_length=0, flags=0):
-        flags = flags | pyagentx3.AX_PDU_FLAG_BYTE_ORDER # Bit 5 = all ints in NETWORK_BYTE_ORDER
+        # Bit 5 = all ints in NETWORK_BYTE_ORDER
+        flags = flags | pyagentx3.AX_PDU_FLAG_BYTE_ORDER
         buf = struct.pack('BBBB', 1, pdu_type, flags, 0)
-        buf += struct.pack('!L', self.session_id) # sessionID
-        buf += struct.pack('!L', self.transaction_id) # transactionID
-        buf += struct.pack('!L', self.packet_id) # packetID
+        buf += struct.pack('!L', self.session_id)  # sessionID
+        buf += struct.pack('!L', self.transaction_id)  # transactionID
+        buf += struct.pack('!L', self.packet_id)  # packetID
         buf += struct.pack('!L', payload_length)
         return buf
 
@@ -160,11 +167,13 @@ class PDU(object):
         elif self.type == pyagentx3.AGENTX_RESPONSE_PDU:
             buf += struct.pack('!LHH', 0, self.error, self.error_index)
             for value in self.values:
-                buf += self.encode_value(value['type'], value['name'], value['value'])
+                buf += self.encode_value(value['type'],
+                                         value['name'], value['value'])
 
         elif self.type == pyagentx3.AGENTX_NOTIFY_PDU:
             for value in self.values:
-                buf += self.encode_value(value['type'], value['name'], value['value'])
+                buf += self.encode_value(value['type'],
+                                         value['name'], value['value'])
 
         else:
             # Unsupported PDU type
@@ -178,7 +187,6 @@ class PDU(object):
 
         return encoded_pdu
 
-
     # ====================================================
     # decode functions
 
@@ -191,9 +199,9 @@ class PDU(object):
             self.decode_buf = self.decode_buf[4:]
             ret = {
                 'n_subid': t[0],
-                'prefix':t[1],
-                'include':t[2],
-                'reserved':t[3],
+                'prefix': t[1],
+                'include': t[2],
+                'reserved': t[3],
             }
             sub_ids = []
             if ret['prefix']:
@@ -254,15 +262,15 @@ class PDU(object):
                 oid, _ = self.decode_oid()
             except Exception:
                 logger.exception('Unable to decode OID for value type (%s %s)',
-                    vtype, pyagentx3.TYPE_NAME.get(vtype, 'UNKNOWN'))
+                                 vtype, pyagentx3.TYPE_NAME.get(vtype, 'UNKNOWN'))
                 ok = False
 
         if ok:
             try:
                 if vtype in [pyagentx3.TYPE_INTEGER,
-                            pyagentx3.TYPE_COUNTER32,
-                            pyagentx3.TYPE_GAUGE32,
-                            pyagentx3.TYPE_TIMETICKS]:
+                             pyagentx3.TYPE_COUNTER32,
+                             pyagentx3.TYPE_GAUGE32,
+                             pyagentx3.TYPE_TIMETICKS]:
                     data = struct.unpack('!L', self.decode_buf[:4])
                     data = data[0]
                     self.decode_buf = self.decode_buf[4:]
@@ -276,14 +284,14 @@ class PDU(object):
                     data, _ = self.decode_oid()
 
                 elif vtype in [pyagentx3.TYPE_IPADDRESS,
-                            pyagentx3.TYPE_OPAQUE,
-                            pyagentx3.TYPE_OCTETSTRING]:
+                               pyagentx3.TYPE_OPAQUE,
+                               pyagentx3.TYPE_OCTETSTRING]:
                     data = self.decode_octet()
 
                 elif vtype in [pyagentx3.TYPE_NULL,
-                            pyagentx3.TYPE_NOSUCHOBJECT,
-                            pyagentx3.TYPE_NOSUCHINSTANCE,
-                            pyagentx3.TYPE_ENDOFMIBVIEW]:
+                               pyagentx3.TYPE_NOSUCHOBJECT,
+                               pyagentx3.TYPE_NOSUCHINSTANCE,
+                               pyagentx3.TYPE_ENDOFMIBVIEW]:
                     # No data
                     data = None
 
@@ -293,10 +301,10 @@ class PDU(object):
 
             except Exception:
                 logger.exception('Unable to decode value of type (%d %s) for OID (%s)',
-                    vtype, pyagentx3.TYPE_NAME.get(vtype, 'UNKNOWN'), oid)
+                                 vtype, pyagentx3.TYPE_NAME.get(vtype, 'UNKNOWN'), oid)
                 ok = False
 
-        return {'type':vtype, 'name':oid, 'data':data}, ok
+        return {'type': vtype, 'name': oid, 'data': data}, ok
 
     @staticmethod
     def decode_header(buf):
@@ -304,14 +312,14 @@ class PDU(object):
             t = struct.unpack('!BBBBLLLL', buf[:pyagentx3.AX_PDU_HDR_LEN])
             ret = {
                 'version': t[0],
-                'pdu_type':t[1],
+                'pdu_type': t[1],
                 'pdu_type_name': pyagentx3.PDU_TYPE_NAME[t[1]],
-                'flags':t[2],
-                'reserved':t[3],
-                'session_id':t[4],
-                'transaction_id':t[5],
-                'packet_id':t[6],
-                'payload_length':t[7],
+                'flags': t[2],
+                'reserved': t[3],
+                'session_id': t[4],
+                'transaction_id': t[5],
+                'packet_id': t[6],
+                'payload_length': t[7],
             }
             return ret
         except Exception:
@@ -354,9 +362,9 @@ class PDU(object):
             self.decode_buf = self.decode_buf[8:]
             self.response = {
                 'sysUpTime': t[0],
-                'error':t[1],
-                'error_name':pyagentx3.ERROR_NAMES[t[1]],
-                'index':t[2],
+                'error': t[1],
+                'error_name': pyagentx3.ERROR_NAMES[t[1]],
+                'index': t[2],
             }
             # Decode VarBindList
             self.values = []
@@ -386,5 +394,5 @@ class PDU(object):
 
         else:
             pdu_type_str = pyagentx3.PDU_TYPE_NAME.get(ret['pdu_type'],
-                'Unknown:'+ str(ret['pdu_type']))
+                                                       'Unknown:' + str(ret['pdu_type']))
             logger.error('Unsupported PDU type: %s', pdu_type_str)

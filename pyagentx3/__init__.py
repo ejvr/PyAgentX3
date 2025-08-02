@@ -2,7 +2,6 @@
 
 import logging
 
-from pyagentx3.updater import Updater
 from pyagentx3.agent import Agent
 from pyagentx3.sethandler import SetHandler, SetHandlerError
 
@@ -14,11 +13,13 @@ def setup_logging(debug=False):
         level = logging.INFO
     logger = logging.getLogger('pyagentx3')
     logger.setLevel(level)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     ch = logging.StreamHandler()
     ch.setLevel(level)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
+
 
 SOCKET_PATH = "/var/agentx/master"
 
@@ -71,7 +72,7 @@ AX_PDU_FLAG_REG = 1         # Instance registration
 AX_PDU_FLAG_NEW = 2         # New index
 AX_PDU_FLAG_ANY = 4         # Any index
 AX_PDU_FLAG_CONTEXT = 8     # Default or non default context
-AX_PDU_FLAG_BYTE_ORDER = 16 # Byte order
+AX_PDU_FLAG_BYTE_ORDER = 16  # Byte order
 
 AGENTX_EMPTY_PDU = 1
 AGENTX_OPEN_PDU = 1

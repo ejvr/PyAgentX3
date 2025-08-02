@@ -2,17 +2,21 @@
 
 # --------------------------------------------
 import logging
+
+
 class NullHandler(logging.Handler):
     def emit(self, record):
         pass
+
+
 logger = logging.getLogger('pyagentx3.tools')
 logger.addHandler(NullHandler())
 # --------------------------------------------
 
-import pyagentx3
-
 
 FMT = '{}  {}  |{}|'
+
+
 def hexdump(byte_string, length=16, base_addr=0, n=0, sep='-'):
     not_shown = ['  ']
     leader = (base_addr + n) % length
