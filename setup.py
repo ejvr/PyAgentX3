@@ -2,14 +2,14 @@ from setuptools import setup
 
 
 setup(
-    name = "pyagentx3",
-    version = "0.1.4",
-    author = "Richard Prinz",
-    author_email = "richard.prinz@min.at",
-    description = ("AgentX package to extend SNMP with pure Python3.10"),
-    license = "BSD",
-    keywords = "snmp network agentx ",
-    url = "https://github.com/rprinz08/pyagentx3",
+    name="pyagentx-async",
+    version="0.1.0",
+    author="Ernst de Vries",
+    author_email="ernst.de.vries@gmail.com",
+    description=("AgentX package to extend SNMP with pure Python3.10"),
+    license="BSD",
+    keywords="snmp network agentx ",
+    url="https://github.com/ejvr/pyagentx3",
     packages=['pyagentx3'],
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -24,11 +24,10 @@ setup(
         "Intended Audience :: Telecommunications Industry",
     ],
     long_description='''\
-PyAgentX3
+PyAgentXAsync
 --------------------
-pyagentx3 is a pure Python3 implementation of AgentX protocol (RFC 2741), it
-will allow you to extend an SNMP agent (e.g. snmpd) by writing AgentX subagents,
-without modifying the original SNMP agent.
+PyAgentXAsync is a pure Python3 implementation of AgentX protocol (RFC 2741),
+using non-block (async) communication. It is a rewrite of Richard Prinz's PyAgentX3.
 
 The agent can support the following commands:
 - snmpget
@@ -39,4 +38,3 @@ The agent can support the following commands:
 It also allows sending notifications/traps.
 ''',
 )
-
