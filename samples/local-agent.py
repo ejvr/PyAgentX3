@@ -27,8 +27,12 @@ async def send_traps(network: pyagentx3.network.Network, root_oid):
             network.value_OCTETSTRING('3.0', f'String for NET-SNMP-EXAMPLES-MIB {count}'),
             network.value_OBJECTIDENTIFIER('4.0', '1.3.6.1.4.1.8072.2.4.0'),
             network.value_INTEGER('2.0', count))
+        network.send_trap(
+            root_oid + '.0.1',
+            network.value_OCTETSTRING(root_oid + '.3.0', f'String for NET-SNMP-EXAMPLES-MIB {count}'),
+            network.value_OBJECTIDENTIFIER(root_oid + '.4.0', '1.3.6.1.4.1.8072.2.4.0'),
+            network.value_INTEGER(root_oid + '.2.0', count))
         count += 1
-        network.send_trap('1.3.6.1.4.1.8072.2.0.1')
         await asyncio.sleep(1)
 
 

@@ -153,13 +153,11 @@ class Network:
                 elif 'trap_oid' in item:
                     #logger.info('New traps')
                     trap_data = item['data']
-
-                    if len(trap_data) > 0:
-                        trap_pdu = self._new_pdu(pyagentx3.AGENTX_NOTIFY_PDU)
-                        trap_pdu.values.append({'name': Network.SNMP_TRAP_OID, 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':item['trap_oid']})
-                        trap_pdu.values.extend(trap_data)
-                        trap_pdu.dump()
-                        await self._send_pdu(trap_pdu)
+                    trap_pdu = self._new_pdu(pyagentx3.AGENTX_NOTIFY_PDU)
+                    trap_pdu.values.append({'name': Network.SNMP_TRAP_OID, 'type':pyagentx3.TYPE_OBJECTIDENTIFIER, 'value':item['trap_oid']})
+                    trap_pdu.values.extend(trap_data)
+                    trap_pdu.dump()
+                    await self._send_pdu(trap_pdu)
 
             except asyncio.QueueEmpty:
                 break
